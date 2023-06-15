@@ -1,0 +1,169 @@
+---
+title: "NYPD"
+date: "2023-05-29"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# NYPD Shooting Incident Data report
+
+We will start this report by importing the data from the data.gov website. In particular, we will import the historic file that contains the NYPD Shooting incident data since 2006. The description of the file contents and terms of use can be found in the following website : <https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic>.
+
+## Importing the file
+
+The following embedded code will retrieve the file from the website and will read its contents into the NYPD memory variable.
+
+```{r echo=TRUE}
+url_file <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+NYPD <- read.csv(url_file)
+```
+
+## Tidying and transforming
+
+In order to manipulate the data, will will first load the necessary Tidyverse libraries with the following code:
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+library (tidyverse)
+library(lubridate)
+options(dplyr.summarise.inform = FALSE)
+```
+
+Then we are going to convert the date and time files of shooting events (that are in character format) to the right date/time format. Also, we will remove the fields X_COORD_CD, Y_COORD_CD (that locate the incident in NY map coordinate) as well as the Lon_Lat field as all are redundant information since th GPS coordinates are already in the file. The summary of the resulting file is displayed.
+
+```{r echo=TRUE}
+NYPD_clean <- NYPD %>%
+     mutate(OCCUR_DATE = mdy(OCCUR_DATE),
+            OCCUR_TIME = hms(OCCUR_TIME)) %>%
+     select (-c(X_COORD_CD,Y_COORD_CD,Lon_Lat))
+summary(NYPD_clean)
+```
+
+------------------------------------------------------------------------
+
+## Visualizing Data
+
+Having normalized and cleaned the data, we are now going to visualize the information using certain criteria. This will help in creating some insights in the shooting events both from a location and time distribution perspectives.
+
+First we will create a time sequence of evolution of the number of incidents. In order to do that we will transform the dates in month/year and group by that field counting the number of incidents that happen in that particular month. The evolution of the shooting incidents from the year 2006 to the end of 2022 presents this interesting aspect:
+
+```{r echo= TRUE}
+NYPD_by_month <- NYPD_clean %>%
+     mutate(OCCUR_MONTH = format(as.Date(OCCUR_DATE), "%Y-%m")) %>%
+     select(INCIDENT_KEY,OCCUR_MONTH) %>%
+     ungroup()
+NYPD_by_month_count <- NYPD_by_month %>%
+     group_by (OCCUR_MONTH) %>%
+     summarise (Incidents = n_distinct(INCIDENT_KEY))
+NYPD_by_month_count <- NYPD_by_month_count %>%
+     mutate(OCCUR_MONTH = ym(OCCUR_MONTH))
+x <- NYPD_by_month_count$OCCUR_MONTH
+y <- NYPD_by_month_count$Incidents
+plot(x,y,xlab="Month/year",ylab="# incidents", pch=16)
+title("Number of incidents per month")
+```
+
+In order to have a sense of the geographical distribution of the events, we will now transform the data and visualize the cumulative number of shooting incidents by neighborhood divided by population of the neighborhood. With that, we will obtain a bar graph like this:
+
+```{r echo=TRUE}
+NYPD_by_BORO <- NYPD_clean %>%
+     group_by(BORO) %>%
+     summarise(Incidents = n_distinct(INCIDENT_KEY)) %>%
+     mutate (Population = c(1379946,2590516,1596273,2278029,491133 )) %>%
+     mutate (Incidents_per_population = Incidents/Population) %>%  
+     select(Incidents_per_population, BORO) %>%
+     ungroup()
+ggplot(NYPD_by_BORO, aes(x = BORO, y = Incidents_per_population)) + geom_bar(stat = "identity", fill = "#00bc6c") + ggtitle("Cumulative number of shooting per population by neighborhoods since 2006")
+```
+
+## Analyzing Data
+
+We are now going to have a look at the shooting incidents and split those that involve a murder and those that do not. In order to accomplish that analysis, we will transform the data again and group by the type of shooting incident. Drawing two series : one for murder events, the other for non-murder events
+
+```{r echo=TRUE}
+NYPD_type <- NYPD_clean %>%
+          mutate(OCCUR_MONTH = format(as.Date(OCCUR_DATE), "%Y-%m")) %>%
+          mutate(OCCUR_MONTH = ym(OCCUR_MONTH)) %>%
+          group_by(OCCUR_MONTH, STATISTICAL_MURDER_FLAG) %>%
+          summarise(Incident = n_distinct(INCIDENT_KEY)) %>%
+          select(Incident, OCCUR_MONTH, STATISTICAL_MURDER_FLAG)
+ggplot(NYPD_type,aes(x=OCCUR_MONTH,y=Incident, col=STATISTICAL_MURDER_FLAG))+geom_point() + labs(title="Shootings by month involving murder since 2006",
+                                                                                                  x ="Month/Year", y = "Incidents", col="Murder?") + theme(legend.position="bottom")
+```
+
+In this graphic,there is an interesting trend observed. While the number of murders tend to be relatively constant in time, the number of non-murder shooting events was in decline from approximately the year 2013 until the year 2020. Then picked up again abruptly after that in the first quarter of 2020. This could be a possible effect of the pandemic and the isolation measures taken.
+
+If we do the same analysis by the victim race, we will get the following graph:
+
+```{r echo=TRUE}
+NYPD_vic_race <- NYPD_clean %>%
+          mutate(OCCUR_MONTH = format(as.Date(OCCUR_DATE), "%Y-%m")) %>%
+          mutate(OCCUR_MONTH = ym(OCCUR_MONTH)) %>%
+          group_by(OCCUR_MONTH, VIC_RACE) %>%
+          summarise(Incident = n_distinct(INCIDENT_KEY)) %>%
+          select(Incident, OCCUR_MONTH, VIC_RACE)
+ggplot(NYPD_vic_race,aes(x=OCCUR_MONTH,y=Incident, col=VIC_RACE))+geom_point() + labs(title="Shootings by month and victim race",
+                                                                                                  x ="Month/Year", y = "Incidents", col="Victim Race") + theme(legend.position="bottom")
+```
+
+It is clear from the data that the amount of victims is lead by the Black Race and followed by White Hispanics. The already mentioned uptick of shooting incidents in the first months of 2020 is quite pronounced too. The influence of murder of George Floyd in May 2020 could be also a trigger that might explain this behavior given the race sensitiveness attached to that event.
+
+## Modeling Data
+
+In this section, we will attempt to model the occurrence of a shooting incidents based on the hour of the day. First of all we will visualize the distribution of cumulative shootings per hour to show that it follows a quite distinct pattern. Certainly, shooting events are more frequent late at night from (7pm to 3am). This trend is quite remarkable as this graph contains cumulative 16 years of data
+
+```{r echo=TRUE}
+NYPD_by_time <- NYPD_clean %>%
+               mutate(OCCUR_TIME =  hour(OCCUR_TIME))  %>%  
+                group_by(OCCUR_TIME) %>%
+                summarise(Incident = n_distinct(INCIDENT_KEY)) %>%
+                select(Incident, OCCUR_TIME)
+ggplot(NYPD_by_time,aes(x=OCCUR_TIME,y=Incident)) + geom_point() + labs(title="Cumulative shootings by time of the day", x="Hour of the day")
+```
+
+At a first glance, it looks like the distribution of shooting incidents follows a quadratic pattern. We will perform a quadratic regression and plot the regression line against the actual points. Putting both the data points and the regression curve in blue, we obtain the following graph:
+
+```{r echo=TRUE}
+NYPD_by_time$OCCUR_TIME2 = NYPD_by_time$OCCUR_TIME^2
+quadraticModel <- lm(Incident ~ OCCUR_TIME + OCCUR_TIME2, data=NYPD_by_time)
+hour_values <- seq(0,23,1)
+IncidentPredict <- predict(quadraticModel,list(OCCUR_TIME=hour_values, OCCUR_TIME2=hour_values^2))
+plot(NYPD_by_time$OCCUR_TIME, NYPD_by_time$Incident, xlab="Hour",ylab="# incidents", pch=16)
+title("Cumulative Incidents per hours and quadratic model")
+lines(hour_values, IncidentPredict, col='blue')
+```
+
+Even if the quadratic curve does not adjust very well, it could be a first approximation to model how the time of day predicts the probability of a shooting incident to occur. One might think that using other higher polynomial regression model, one could obtain a more adjusted prediction. In any case, the pattern is very clear: the most dangerous hours are from 7pm to 3am while the least dangeraous are from 6am to 11am. The summary of the quadratic regression model is the following:
+
+```{r echo=TRUE}
+summary(quadraticModel)
+```
+
+------------------------------------------------------------------------
+
+## Bias Identification & Conclusion
+
+After reflecting on what could be the personal bias added to my report, I have identified two possible elements:
+
+-   Race : one of my first ideas to analyze the informaiton was to use the race of the victim to find out if that data point could shed some light into acquiring more insights into the incidents. It turned out that indeed race is a very significant parameter and the majority of victim's race were black followed by white Hispanics. This might be in principle subject to race bias. In order to mitigate it, I checked the race composition of the NY population and it turned out that the actual race composition of the overall population is different with majority of white, followed by African Americans and then Asian. So unfortunately, the race determines the probability of being involved in shooting incident.
+
+-   Location : here the initial bias was to immediately jump into the conclusion that Brooklyn was the most dangerous place given that has the highest amount of shooting incidents reported. However, if the divide the number of incidents by the number of inhabitants in the BORO (bias mitigation), we get to the conclusion that Bronx is actually the most dangerous in that sense with a ratio almost 4 times the one for the safest Staten Island.
+
+In summary, as a results of the processing, visualizaiton, analysis and modelling of the data, we can get to these final conclusions:
+
+1.  Shooting events were trending down from approximately 2013 until the year 2020. In the first months of 2020 there has been a remarkable uptick of shooting incidents reaching all time highs and now still in the highest values.
+
+2.  The uptick in shooting incidents in early 2020 was more pronounce for events resulting in murder. Non-murder events raised but kept much more stable and in line with the previous years.
+
+3.  Unfortunately, the victim's race is a determinant trait when assessing the probability of being involved in a shooting event. The ration of Black and White Hispanic races involved in these events is much higher that the overall race population distribution in NY.
+
+4.  The density of shooting incidents by population differs substantially by neighborhood. The ratio in Bronx is almost 4 times higher that the one in Staten Island.
+
+5.  Based on the data and how it has been visualized, there is evidence to affirm that the probability of shooting event happening between 7pm and 3am is close to 5 times higher that the one from 6am to 11am and that the distribution of shooting incidents follows approximately a quadratic distribution.
+
+------------------------------------------------------------------------
